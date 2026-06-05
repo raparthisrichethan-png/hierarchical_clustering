@@ -1,16 +1,17 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
 
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from sklearn.cluster import AgglomerativeClustering
 from scipy.cluster.hierarchy import dendrogram, linkage
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# -------------------------------
-# Page Configuration
-# -------------------------------
+# -----------------------------------
+# PAGE CONFIG
+# -----------------------------------
 st.set_page_config(
     page_title="Hierarchical Clustering",
     layout="wide"
@@ -18,9 +19,9 @@ st.set_page_config(
 
 st.title("Hierarchical Clustering Dashboard")
 
-# -------------------------------
-# File Upload
-# -------------------------------
+# -----------------------------------
+# FILE UPLOAD
+# -----------------------------------
 uploaded_file = st.file_uploader(
     "Upload CSV File",
     type=["csv"]
@@ -28,15 +29,17 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
 
-    # Load Dataset
+    # -----------------------------------
+    # LOAD DATA
+    # -----------------------------------
     df = pd.read_csv(uploaded_file)
 
     st.subheader("Dataset Preview")
     st.dataframe(df.head())
 
-    # -------------------------------
-    # EDA Section
-    # -------------------------------
+    # -----------------------------------
+    # EDA SECTION
+    # -----------------------------------
     st.header("Exploratory Data Analysis")
 
     col1, col2 = st.columns(2)
@@ -51,75 +54,152 @@ if uploaded_file is not None:
     st.write(df.columns.tolist())
 
     st.subheader("Missing Values")
-    st.dataframe(df.isnull().sum().reset_index().rename(
-        columns={"index": "Column", 0: "Missing Values"}
-    ))
 
-    st.subheader("Statistical Summary")
-    st.dataframe(df.describe())
+    missing_df = pd.DataFrame({
+        "Column": df.columns,
+        "Missing Values": df.isnull().sum().values
+    })
 
-    # -------------------------------
-    # Data Preprocessing
-    # -------------------------------
+    st.dataframe(missing_df)
+
+    st.subheader("Data Types")
+    st.dataframe(
+        pd.DataFrame({
+            "Column": df.columns,
+            "Data Type": df.dtypes.astype(str)
+        })
+    )
+
+    # -----------------------------------
+    # PREPROCESSING
+    # -----------------------------------
     processed_df = df.copy()
 
+    # Remove completely empty columns
+    processed_df.dropna(
+        axis=1,
+        how="all",
+        inplace=True
+    )
+
+    # Handle datetime columns
     for col in processed_df.columns:
-        if processed_df[col].dtype == "object":
-            le = LabelEncoder()
-            processed_df[col] = le.fit_transform(
-                processed_df[col].astype(str)
+
+        try:
+            converted = pd.to_datetime(
+                processed_df[col],
+                errors="coerce"
             )
 
+            valid_ratio = converted.notna().mean()
+
+            if valid_ratio > 0.8:
+                processed_df[col] = (
+                    converted.astype("int64")
+                    // 10**9
+                )
+
+        except:
+            pass
+
+    # Encode categorical columns
+    for col in processed_df.columns:
+
+        if processed_df[col].dtype == "object":
+
+            processed_df[col] = (
+                processed_df[col]
+                .astype(str)
+                .fillna("Unknown")
+            )
+
+            le = LabelEncoder()
+
+            processed_df[col] = le.fit_transform(
+                processed_df[col]
+            )
+
+    # Convert everything to numeric
+    processed_df = processed_df.apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    # Fill missing values
+    processed_df.fillna(0, inplace=True)
+
+    # Keep numeric columns only
+    processed_df = processed_df.select_dtypes(
+        include=np.number
+    )
+
+    if processed_df.shape[1] < 2:
+        st.error(
+            "Dataset must contain at least 2 usable numerical columns."
+        )
+        st.stop()
+
+    # -----------------------------------
+    # STATISTICS
+    # -----------------------------------
+    st.subheader("Statistical Summary")
+    st.dataframe(processed_df.describe())
+
+    # -----------------------------------
+    # SCALING
+    # -----------------------------------
     scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(processed_df)
+
+    scaled_data = scaler.fit_transform(
+        processed_df
+    )
 
     scaled_df = pd.DataFrame(
         scaled_data,
         columns=processed_df.columns
     )
 
-    # -------------------------------
-    # Correlation Heatmap
-    # -------------------------------
+    # -----------------------------------
+    # CORRELATION HEATMAP
+    # -----------------------------------
     st.subheader("Correlation Heatmap")
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(
+        figsize=(10, 6)
+    )
 
     sns.heatmap(
         scaled_df.corr(),
-        annot=True,
         cmap="coolwarm",
         ax=ax
     )
 
     st.pyplot(fig)
 
-    # -------------------------------
-    # Distribution Plot
-    # -------------------------------
+    # -----------------------------------
+    # DISTRIBUTION PLOT
+    # -----------------------------------
     st.subheader("Feature Distribution")
 
-    selected_column = st.selectbox(
-        "Select Column",
+    selected_col = st.selectbox(
+        "Select Feature",
         scaled_df.columns
     )
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots()
 
     sns.histplot(
-        scaled_df[selected_column],
+        scaled_df[selected_col],
         kde=True,
         ax=ax
     )
 
     st.pyplot(fig)
 
-    # -------------------------------
-    # Dendrogram
-    # -------------------------------
+    # -----------------------------------
+    # DENDROGRAM
+    # -----------------------------------
     st.header("Hierarchical Clustering")
-
-    st.subheader("Dendrogram")
 
     linkage_method = st.selectbox(
         "Linkage Method",
@@ -131,28 +211,30 @@ if uploaded_file is not None:
         method=linkage_method
     )
 
-    fig, ax = plt.subplots(figsize=(12, 5))
+    st.subheader("Dendrogram")
+
+    fig, ax = plt.subplots(
+        figsize=(12, 6)
+    )
 
     dendrogram(
         linkage_matrix,
-        ax=ax,
         truncate_mode="level",
-        p=5
+        p=5,
+        ax=ax
     )
 
-    plt.title("Hierarchical Clustering Dendrogram")
-    plt.xlabel("Samples")
-    plt.ylabel("Distance")
+    ax.set_title(
+        "Hierarchical Clustering Dendrogram"
+    )
 
     st.pyplot(fig)
 
-    # -------------------------------
-    # Clustering
-    # -------------------------------
-    from sklearn.cluster import AgglomerativeClustering
-
+    # -----------------------------------
+    # CLUSTERING
+    # -----------------------------------
     n_clusters = st.slider(
-        "Number of Clusters",
+        "Select Number of Clusters",
         min_value=2,
         max_value=10,
         value=3
@@ -162,38 +244,44 @@ if uploaded_file is not None:
         n_clusters=n_clusters
     )
 
-    clusters = model.fit_predict(scaled_df)
+    clusters = model.fit_predict(
+        scaled_df
+    )
 
     result_df = df.copy()
+
     result_df["Cluster"] = clusters
 
+    # -----------------------------------
+    # RESULTS
+    # -----------------------------------
     st.subheader("Clustered Dataset")
+
     st.dataframe(result_df)
 
-    # -------------------------------
-    # Cluster Distribution
-    # -------------------------------
     st.subheader("Cluster Distribution")
 
-    cluster_counts = (
+    st.bar_chart(
         result_df["Cluster"]
         .value_counts()
         .sort_index()
     )
 
-    st.bar_chart(cluster_counts)
-
-    # -------------------------------
-    # Download Results
-    # -------------------------------
-    csv = result_df.to_csv(index=False).encode("utf-8")
+    # -----------------------------------
+    # DOWNLOAD
+    # -----------------------------------
+    csv = result_df.to_csv(
+        index=False
+    ).encode("utf-8")
 
     st.download_button(
-        label="Download Clustered CSV",
-        data=csv,
-        file_name="hierarchical_clustering_output.csv",
-        mime="text/csv"
+        "Download Clustered Dataset",
+        csv,
+        "hierarchical_clustering_output.csv",
+        "text/csv"
     )
 
 else:
-    st.info("Please upload a CSV file.")
+    st.info(
+        "Please upload a CSV file to begin."
+    )
